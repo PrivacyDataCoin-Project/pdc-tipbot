@@ -57,3 +57,16 @@ Checklist for operators before switching GitHub visibility to **Public**.
 | Live SQLite ledger | User balances + payment_ids |
 | Backup folders | Usually contain seed copies |
 | Filled systemd units with host paths | Optional; prefer examples only |
+
+## Branch protection (live)
+
+`master` is protected (enforce admins):
+
+- Pull request required (0 approvals — solo-maintainer friendly; raise when a second reviewer exists)
+- Required CI status check: `test` (strict, up-to-date branch)
+- Required conversation resolution
+- Required signed commits
+- Force push / branch deletion blocked
+- Delete head branch on merge enabled
+
+Secret scanning + push protection + Dependabot security updates are enabled on the public repo.
