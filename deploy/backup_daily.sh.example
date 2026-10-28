@@ -1,0 +1,175 @@
+#!/bin/bash
+# EXAMPLE daily backup. Copy outside git, set TIPBOT_APP / TIPBOT_SECRETS / TIPBOT_BACKUP_ROOT.
+# Backups contain wallet seed material — mode 700; never commit backup output.
+
+set -euo pipefail
+
+APP="${TIPBOT_APP:-/opt/pdc-tipbot}"
+SECRETS="${TIPBOT_SECRETS:-/opt/pdc-tipbot-secrets}"
+ROOT="${TIPBOT_BACKUP_ROOT:-/opt/pdc-tipbot-backup}"
+KEEP_DAYS=14
+STAMP=$(date -u +%Y-%m-%d)
+OUT="$ROOT/$STAMP"
+LOG="$ROOT/backup.log"
+VENV_PY="$APP/.venv/bin/python"
+
+mkdir -p "$OUT" "$ROOT"
+chmod 700 "$ROOT" "$OUT"
+
+{
+  echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) backup start ==="
+
+  # 1+2) SQLite online backup + address/ledger export (Python; no sqlite3 CLI needed)
+  mkdir -p "$OUT/db" "$OUT/ledger"
+  export TIPBOT_BACKUP_STAMP="$STAMP"
+  export TIPBOT_BACKUP_ROOT="$ROOT"
+  PYTHONPATH="$APP" TIPBOT_BACKUP_STAMP="$STAMP" TIPBOT_BACKUP_ROOT="$ROOT" "$VENV_PY" - <<'PY'
+import json
+import os
+import sqlite3
+from pathlib import Path
+
+from tipbot.config import load_settings
+from tipbot.db import Database
+
+stamp = os.environ["TIPBOT_BACKUP_STAMP"]
+root = Path(os.environ.get("TIPBOT_BACKUP_ROOT", "/opt/pdc-tipbot-backup")) / stamp
+db_out = root / "db"
+ledger_out = root / "ledger"
+db_out.mkdir(parents=True, exist_ok=True)
+ledger_out.mkdir(parents=True, exist_ok=True)
+
+s = load_settings()
+src = Path(s.database_path)
+dst = db_out / "tipbot.db"
+if not src.exists():
+    raise SystemExit(f"missing db: {src}")
+
+# Consistent online snapshot
+con = sqlite3.connect(str(src))
+try:
+    bck = sqlite3.connect(str(dst))
+    try:
+        con.backup(bck)
+    finally:
+        bck.close()
+finally:
+    con.close()
+
+chk = sqlite3.connect(str(dst))
+try:
+    integrity = chk.execute("PRAGMA integrity_check").fetchone()[0]
+finally:
+    chk.close()
+(db_out / "integrity.txt").write_text(integrity + "\n", encoding="utf-8")
+print("db_integrity", integrity)
+
+db = Database(s.database_path)
+users = db.list_users()
+rows = []
+with (ledger_out / "addresses.tsv").open("w", encoding="utf-8") as tsv:
+    tsv.write(
+        "id\tplatform\tplatform_user_id\tdisplay_name\tpayment_id\t"
+        "integrated_address\tbalance_atomic\n"
+    )
+    for u in users:
+        tsv.write(
+            f"{u.id}\t{u.platform}\t{u.platform_user_id}\t{u.display_name}\t"
+            f"{u.payment_id}\t{u.integrated_address}\t{u.balance_atomic}\n"
+        )
+        rows.append(
+            {
+                "id": u.id,
+                "platform": u.platform,
+                "platform_user_id": u.platform_user_id,
+                "display_name": u.display_name,
+                "payment_id": u.payment_id,
+                "integrated_address": u.integrated_address,
+                "balance_atomic": u.balance_atomic,
+            }
+        )
+
+meta = {
+    "liabilities_atomic": db.total_liabilities(),
+    "open_payouts": [
+        {
+            "id": p.id,
+            "user_id": p.user_id,
+            "status": p.status,
+            "amount_atomic": p.amount_atomic,
+            "fee_atomic": p.fee_atomic,
+            "kind": p.kind,
+            "address": p.address,
+            "tx_hash": p.tx_hash,
+        }
+        for p in db.list_open_payouts()
+    ],
+    "users": rows,
+}
+(ledger_out / "snapshot.json").write_text(
+    json.dumps(meta, indent=2) + "\n", encoding="utf-8"
+)
+print(f"exported_users={len(rows)} liabilities={meta['liabilities_atomic']}")
+PY
+
+  # 3) Hot wallet file — brief stop of RPC for a consistent copy
+  mkdir -p "$OUT/wallet"
+  WAS_ACTIVE=0
+  if systemctl is-active --quiet pdc-tipbot-wallet; then
+    WAS_ACTIVE=1
+    sudo systemctl stop pdc-tipbot
+    sudo systemctl stop pdc-tipbot-wallet
+    sleep 2
+  fi
+  if [[ -f "$APP/wallet/tipbot" ]]; then
+    cp -a "$APP/wallet/tipbot" "$OUT/wallet/tipbot"
+    # companion keys if present
+    shopt -s nullglob
+    for f in "$APP/wallet/tipbot".*; do
+      cp -a "$f" "$OUT/wallet/"
+    done
+    shopt -u nullglob
+  else
+    echo "WARN: wallet file missing"
+  fi
+  if [[ "$WAS_ACTIVE" -eq 1 ]]; then
+    sudo systemctl start pdc-tipbot-wallet
+    sleep 3
+    sudo systemctl start pdc-tipbot
+  fi
+
+  # 4) Secrets needed to restore (chmod tight) — includes seed/password
+  mkdir -p "$OUT/secrets"
+  chmod 700 "$OUT/secrets"
+  for f in address.txt VIEW_KEY.txt SEED.txt wallet.password SECRETS.env RESTORE.txt matrix.password; do
+    if [[ -f "$SECRETS/$f" ]]; then
+      install -m 600 "$SECRETS/$f" "$OUT/secrets/$f"
+    fi
+  done
+
+  # 5) Manifest
+  {
+    echo "stamp=$STAMP"
+    echo "created_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "hot_alias=@pdctipbot"
+    echo "app=$APP"
+    echo "wallet_rpc=127.0.0.1:19225"
+    if [[ -f "$OUT/secrets/address.txt" ]]; then
+      echo "hot_address=$(tr -d '\r\n' < "$OUT/secrets/address.txt")"
+    fi
+    if [[ -f "$OUT/db/tipbot.db" ]]; then
+      echo "db_bytes=$(wc -c < "$OUT/db/tipbot.db")"
+    fi
+    if [[ -f "$OUT/wallet/tipbot" ]]; then
+      echo "wallet_bytes=$(wc -c < "$OUT/wallet/tipbot")"
+    fi
+  } > "$OUT/MANIFEST.txt"
+  chmod 600 "$OUT/MANIFEST.txt"
+
+  # 6) Retention
+  find "$ROOT" -mindepth 1 -maxdepth 1 -type d -mtime +"$KEEP_DAYS" -exec rm -rf {} +
+  echo "=== backup done $OUT ==="
+} >>"$LOG" 2>&1
+
+chmod 600 "$LOG" || true
+echo "OK $OUT"

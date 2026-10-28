@@ -1,0 +1,14 @@
+#!/bin/bash
+# EXAMPLE — install cron for backup_daily.sh (edit paths; do not commit filled copies).
+set -euo pipefail
+APP="${TIPBOT_APP:-/opt/pdc-tipbot}"
+SCRIPT="$APP/deploy/backup_daily.sh"
+chmod 755 "$SCRIPT"
+
+CRON_LINE="15 3 * * * TIPBOT_APP=$APP TIPBOT_SECRETS=${TIPBOT_SECRETS:-/opt/pdc-tipbot-secrets} TIPBOT_BACKUP_ROOT=${TIPBOT_BACKUP_ROOT:-/opt/pdc-tipbot-backup} $SCRIPT"
+tmp="$HOME/.cron.tmp.tipbot.$$"
+crontab -l 2>/dev/null | grep -v 'backup_daily.sh' >"$tmp" || true
+echo "$CRON_LINE" >>"$tmp"
+crontab "$tmp"
+rm -f "$tmp"
+echo "Installed cron:"; crontab -l | grep backup_daily || true

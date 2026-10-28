@@ -1,0 +1,25 @@
+[Unit]
+Description=PDC TipBot (Telegram + Matrix)
+After=network-online.target pdc-tipbot-wallet.service
+Wants=network-online.target
+Wants=pdc-tipbot-wallet.service
+
+[Service]
+Type=simple
+# Edit user/paths for your host. Do not commit a filled-in copy.
+User=tipbot
+Group=tipbot
+WorkingDirectory=/opt/pdc-tipbot
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/opt/pdc-tipbot/.env
+ExecStart=/opt/pdc-tipbot/.venv/bin/python -m tipbot
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+# Hardening (optional)
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

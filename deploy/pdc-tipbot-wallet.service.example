@@ -1,0 +1,26 @@
+[Unit]
+Description=PDC TipBot hot wallet (simplewallet RPC on localhost)
+After=network-online.target
+Wants=network-online.target
+# After=your-daemon.service
+
+[Service]
+Type=simple
+User=tipbot
+Group=tipbot
+# Bind RPC to loopback only. Password file must stay outside git (mode 600).
+ExecStart=/usr/local/bin/simplewallet \
+  --wallet-file=/opt/pdc-tipbot/wallet/tipbot \
+  --password-file=/etc/pdc-secrets/tipbot-wallet.pass \
+  --daemon-address=127.0.0.1:19211 \
+  --rpc-bind-ip=127.0.0.1 \
+  --rpc-bind-port=19225 \
+  --no-password-confirmation \
+  --log-file=/opt/pdc-tipbot/logs/wallet-rpc.log
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,115 @@
+#!/bin/bash
+# EXAMPLE Matrix .env helper. No secrets in git; password file is local-only.
+# Prepare Matrix env for @pdctipbot (password left for operator to fill).
+set -euo pipefail
+APP="${TIPBOT_APP:-/opt/pdc-tipbot}"
+SECRETS="${TIPBOT_SECRETS:-/opt/pdc-tipbot-secrets}"
+ENVF="$APP/.env"
+PASSF="$SECRETS/matrix.password"
+
+mkdir -p "$APP/data/matrix_store"
+chmod 700 "$APP/data/matrix_store"
+mkdir -p "$SECRETS"
+chmod 700 "$SECRETS"
+
+# Ensure placeholder password file exists (operator fills this OR .env).
+if [[ ! -f "$PASSF" ]]; then
+  umask 077
+  printf '' > "$PASSF"
+  chmod 600 "$PASSF"
+fi
+
+python3 <<'PY'
+from pathlib import Path
+
+env_path = Path(__import__("os").environ.get("TIPBOT_APP", "/opt/pdc-tipbot")) / ".env"
+text = env_path.read_text() if env_path.exists() else ""
+vals = {}
+for line in text.splitlines():
+    if not line.strip() or line.strip().startswith("#") or "=" not in line:
+        continue
+    k, _, v = line.partition("=")
+    vals[k.strip()] = v
+
+defaults = {
+    "MATRIX_HOMESERVER": "https://matrix.privacydatacoin.com",
+    "MATRIX_USER": "@pdctipbot:privacydatacoin.com",
+    "MATRIX_PASSWORD": vals.get("MATRIX_PASSWORD", ""),
+    "MATRIX_ACCESS_TOKEN": vals.get("MATRIX_ACCESS_TOKEN", ""),
+    "MATRIX_DEVICE_ID": vals.get("MATRIX_DEVICE_ID", ""),
+    "MATRIX_COMMAND_PREFIXES": "!,/",
+    "MATRIX_STORE_PATH": "${TIPBOT_APP:-/opt/pdc-tipbot}/data/matrix_store",
+}
+for k, v in defaults.items():
+    vals[k] = v if k.startswith("MATRIX_") and k not in (
+        "MATRIX_PASSWORD",
+        "MATRIX_ACCESS_TOKEN",
+        "MATRIX_DEVICE_ID",
+    ) else vals.get(k, v)
+# Always set identity / homeserver / store / prefixes
+vals["MATRIX_HOMESERVER"] = defaults["MATRIX_HOMESERVER"]
+vals["MATRIX_USER"] = defaults["MATRIX_USER"]
+vals["MATRIX_COMMAND_PREFIXES"] = defaults["MATRIX_COMMAND_PREFIXES"]
+vals["MATRIX_STORE_PATH"] = defaults["MATRIX_STORE_PATH"]
+vals.setdefault("MATRIX_PASSWORD", "")
+vals.setdefault("MATRIX_ACCESS_TOKEN", "")
+vals.setdefault("MATRIX_DEVICE_ID", "")
+
+# Prefer password from secrets/matrix.password when non-empty
+passf = Path(__import__("os").environ.get("TIPBOT_SECRETS", "/opt/pdc-tipbot-secrets")) / "matrix.password"
+if passf.exists():
+    secret = passf.read_text().strip()
+    if secret:
+        vals["MATRIX_PASSWORD"] = secret
+
+lines = []
+if env_path.exists():
+    for line in env_path.read_text().splitlines():
+        if not line.strip() or line.strip().startswith("#") or "=" not in line:
+            lines.append(line)
+            continue
+        k, _, _ = line.partition("=")
+        k = k.strip()
+        if k in vals:
+            lines.append(f"{k}={vals.pop(k)}")
+        else:
+            lines.append(line)
+for k, v in vals.items():
+    if k.startswith("MATRIX_"):
+        lines.append(f"{k}={v}")
+
+env_path.write_text("\n".join(lines).rstrip() + "\n")
+env_path.chmod(0o600)
+print("ENV_UPDATED", env_path)
+print("MATRIX_USER", Path(env_path).read_text().split("MATRIX_USER=")[1].splitlines()[0])
+pwd = [ln for ln in Path(env_path).read_text().splitlines() if ln.startswith("MATRIX_PASSWORD=")][0]
+print("MATRIX_PASSWORD_SET", bool(pwd.split("=", 1)[1]))
+PY
+
+# Document in SECRETS.env
+python3 <<'PY'
+from pathlib import Path
+p = Path(__import__("os").environ.get("TIPBOT_SECRETS", "/opt/pdc-tipbot-secrets")) / "SECRETS.env"
+lines = p.read_text().splitlines() if p.exists() else []
+keep = [
+    ln
+    for ln in lines
+    if not ln.startswith("MATRIX_")
+]
+keep.extend(
+    [
+        "MATRIX_HOMESERVER=https://matrix.privacydatacoin.com",
+        "MATRIX_USER=@pdctipbot:privacydatacoin.com",
+        "MATRIX_PASSWORD_FILE=" + str(Path(__import__("os").environ.get("TIPBOT_SECRETS", "/opt/pdc-tipbot-secrets")) / "matrix.password"),
+        "NOTE_MATRIX=Put Matrix account password into matrix.password (one line) OR set MATRIX_PASSWORD in app .env then restart the tipbot service",
+    ]
+)
+p.write_text("\n".join(keep) + "\n")
+p.chmod(0o600)
+print("SECRETS_OK")
+PY
+
+echo "READY"
+echo "Password file: $PASSF  (preferred)"
+echo "Or edit:       $ENVF  line MATRIX_PASSWORD=..."
+echo "Then: sudo systemctl restart pdc-tipbot"

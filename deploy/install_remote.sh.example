@@ -1,0 +1,58 @@
+#!/bin/bash
+# EXAMPLE only — copy to a private ops location, edit paths, never commit a filled .env.
+# Generates an application .env from a local secrets directory.
+set -euo pipefail
+
+APP="${TIPBOT_APP:-/opt/pdc-tipbot}"
+SECRETS="${TIPBOT_SECRETS:-/opt/pdc-tipbot-secrets}"
+
+chmod 600 "$SECRETS"/* 2>/dev/null || true
+chmod 700 "$SECRETS" "$APP/wallet" 2>/dev/null || true
+
+TG=$(grep '^TELEGRAM_TOKEN=' "$SECRETS/RESTORE.txt" | cut -d= -f2-)
+MX_PASS_FILE="$SECRETS/matrix.password"
+MX_PASS=""
+if [[ -f "$MX_PASS_FILE" ]]; then
+  MX_PASS=$(tr -d '\r\n' < "$MX_PASS_FILE")
+fi
+
+umask 077
+cat > "$APP/.env" <<EOF
+TELEGRAM_TOKEN=$TG
+DATABASE_PATH=$APP/data/tipbot.db
+MATRIX_STORE_PATH=$APP/data/matrix_store
+MATRIX_HOMESERVER=https://matrix.privacydatacoin.com
+MATRIX_USER=@pdctipbot:privacydatacoin.com
+MATRIX_PASSWORD=$MX_PASS
+MATRIX_ACCESS_TOKEN=
+MATRIX_DEVICE_ID=
+MATRIX_COMMAND_PREFIXES=!,/
+MATRIX_ALLOWED_ROOMS=
+WALLET_RPC_URL=http://127.0.0.1:19225/json_rpc
+DAEMON_RPC_URL=http://127.0.0.1:19211
+TRANSFER_FEE_ATOMIC=10000000000
+DEPOSIT_MIN_CONFIRMATIONS=10
+DEPOSIT_SCAN_INTERVAL_SEC=30
+MIN_TIP_ATOMIC=1000000000
+MIN_WITHDRAW_ATOMIC=10000000000
+DAILY_WITHDRAW_LIMIT_ATOMIC=50000000000000
+EXPLORER_TX_URL=https://explorer.privacydatacoin.com/transaction/
+BOT_DISPLAY_NAME=PDC TipBot
+ADMIN_TELEGRAM_USERNAMES=
+ADMIN_MATRIX_USER_IDS=
+RAIN_ENABLED=1
+RAIN_TELEGRAM_CHAT_IDS=
+RAIN_MATRIX_ROOM_IDS=
+RAIN_TARGET_CLAIMS_PER_DAY=10
+RAIN_CLAIM_MIN_ATOMIC=100000000000
+RAIN_CLAIM_MAX_ATOMIC=1000000000000
+RAIN_COOLDOWN_SEC=86400
+EOF
+chmod 600 "$APP/.env"
+mkdir -p "$APP/data/matrix_store"
+chmod 700 "$APP/data/matrix_store"
+
+cd "$APP"
+python3 -m venv .venv
+./.venv/bin/pip install -q -r requirements.txt
+echo "Wrote $APP/.env — fill allowlists/admins, then install systemd units from *.example"

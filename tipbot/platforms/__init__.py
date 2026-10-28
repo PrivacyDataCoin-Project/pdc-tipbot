@@ -1,0 +1,1 @@
+"""Platform adapters (Telegram, Matrix)."""
