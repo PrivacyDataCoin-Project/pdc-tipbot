@@ -87,6 +87,8 @@ def test_rain_fund_and_claim(tmp_path: Path, monkeypatch) -> None:
         chat_id=TG_CHAT,
     )
     assert "Rain claimed" in claimed.text
+    assert "Your tipbot balance" not in claimed.text
+    assert "Pool left" in claimed.text
     bob = svc.db.get_user("telegram", "2")
     assert bob and bob.balance_atomic > 0
 

@@ -897,13 +897,10 @@ class TipService:
             if "empty" in msg or "too small" in msg:
                 return CommandResult("Rain pool is empty or too small.")
             return CommandResult(msg.capitalize())
-        fresh = self.db.get_user_by_id(user.id)
-        bal = format_amount(fresh.balance_atomic) if fresh else "?"
         rain2 = self.db.get_user_by_id(rain.id)
         pool_s = format_amount(rain2.balance_atomic) if rain2 else "?"
         return CommandResult(
             f"Rain claimed: {format_amount(amount)} PDC.\n"
-            f"Your tipbot balance: {bal} PDC\n"
             f"Pool left: {pool_s} PDC\n"
             f"Next claim after 24h."
         )
